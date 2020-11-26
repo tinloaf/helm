@@ -3343,6 +3343,27 @@ value of `helm-full-frame' or `helm-split-window-default-side'."
 ;; Shut up byte-compiler in emacs-26
 (defvar tab-bar-mode)
 
+(defun current-frame-display-dimensions ()
+	"Returns dimensions (in pixels) of the display that dominates the selected frame.
+
+Dimensions are returned as (X Y WIDTH HEIGHT), where X and Y specify the
+offset of the respective display. In single-monitor setup, these should
+always be 0. The returned dimensions represent the useable workarea,
+see `display-monitor-attributes-list` for details."
+  (let* ((selected-display-info
+          ;; Filter for the display info that contains the
+          ;; selected frame
+         (elt (seq-filter (lambda (displayinfo)
+                       (seq-contains-p
+                        (alist-get 'frames displayinfo)
+                        (selected-frame)
+                        ))
+                     (display-monitor-attributes-list)) 0)
+         )
+        )
+    ;; Return useable workspace
+    (alist-get 'workarea selected-display-info)))
+
 (defun helm-display-buffer-in-own-frame (buffer &optional resume)
   "Display Helm buffer BUFFER in a separate frame.
 
@@ -3362,8 +3383,22 @@ Note that this feature is available only with emacs-25+."
       (helm-default-display-buffer buffer)
     (setq helm--buffer-in-new-frame-p t)
     (let* ((pos (window-absolute-pixel-position))
-           (half-screen-size (/ (display-pixel-height x-display-name) 2))
+           (current-display-dim (current-frame-display-dimensions))
+           (current-display-x (elt current-display-dim 0))
+           (current-display-y (elt current-display-dim 1))
+           (current-display-width (elt current-display-dim 2))
+           (current-display-height (elt current-display-dim 3))
            (frame-info (frame-geometry))
+
+           (current-display-y-midpoint (+ (/ current-display-height 2) current-display-y))
+           (helm-display-frame-width (+ (* helm-display-buffer-width (frame-char-width))
+                                        ;; This is not perfect: the new frame might have a different
+                                        ;; decoration from our current frame.
+                                        (car (alist-get 'external-border-size frame-info))
+                                        (alist-get 'internal-border-width frame-info)
+                                        ))
+
+
            (prmt-size (length helm--prompt))
            (line-height (frame-char-height))
            tab-bar-mode
@@ -3374,17 +3409,22 @@ Note that this feature is available only with emacs-25+."
                `((width . ,helm-display-buffer-width)
                  (height . ,helm-display-buffer-height)
                  (tool-bar-lines . 0)
-                 (left . ,(- (car pos)
+                 (left . ,(min
+                           ;; put point at the end of the prompt
+                           (- (car pos)
                              (* (frame-char-width)
                                 (if (< (- (point) (point-at-bol)) prmt-size)
                                     (- (point) (point-at-bol))
-                                  prmt-size))))
+                                  prmt-size)))
+                           ;; Don't exceed the current display's right border
+                           (- (+ current-display-x current-display-width)
+                              helm-display-frame-width)))
                  ;; Try to put frame at the best possible place.
                  ;; Frame should be below point if enough
                  ;; place, otherwise above point and
                  ;; current line should not be hidden
                  ;; by helm frame.
-                 (top . ,(if (> (cdr pos) half-screen-size)
+                 (top . ,(if (> (cdr pos) current-display-y-midpoint)
                              ;; Above point
                              (- (cdr pos)
                                 ;; add 2 lines to make sure there is always a gap
@@ -3418,7 +3458,7 @@ Note that this feature is available only with emacs-25+."
         (add-hook 'helm-minibuffer-set-up-hook 'helm-hide-minibuffer-maybe)
         (with-helm-buffer
           (setq-local helm-echo-input-in-header-line
-                      (not (> (cdr pos) half-screen-size)))))
+                      (not (> (cdr pos) current-display-y-midpoint)))))
       (helm-display-buffer-popup-frame buffer default-frame-alist)
       ;; When frame size have been modified manually by user restore
       ;; it to default value unless resuming or not using
